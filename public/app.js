@@ -19,8 +19,32 @@ const rtcConfig = {
     iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
 };
 
+// --- Particles.js Configuration ---
+function initParticles() {
+    if (typeof particlesJS !== 'undefined') {
+        particlesJS('particles-js', {
+            "particles": {
+                "number": { "value": 80, "density": { "enable": true, "value_area": 800 } },
+                "color": { "value": "#ffffff" },
+                "shape": { "type": "circle" },
+                "opacity": { "value": 0.5, "random": false },
+                "size": { "value": 3, "random": true },
+                "line_linked": { "enable": true, "distance": 150, "color": "#ffffff", "opacity": 0.4, "width": 1 },
+                "move": { "enable": true, "speed": 6, "direction": "none", "random": false, "straight": false, "out_mode": "out", "bounce": false }
+            },
+            "interactivity": {
+                "detect_on": "canvas",
+                "events": { "onhover": { "enable": true, "mode": "repulse" }, "onclick": { "enable": true, "mode": "push" }, "resize": true },
+                "modes": { "grab": { "distance": 400, "line_linked": { "opacity": 1 } }, "bubble": { "distance": 400, "size": 40, "duration": 2, "opacity": 8, "speed": 3 }, "repulse": { "distance": 200, "duration": 0.4 }, "push": { "particles_nb": 4 }, "remove": { "particles_nb": 2 } }
+            },
+            "retina_detect": true
+        });
+    }
+}
+
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
+    initParticles();
     if (document.getElementById('login-form')) {
         initAuthFlow();
     } else if (document.getElementById('welcome-name')) {
@@ -142,8 +166,59 @@ async function initDashboard() {
     document.getElementById('reject-btn').onclick = rejectCall;
 
     await cleanupOldCalls();
-    await supabaseClient.from('users').update({ online: true }).eq('roll_no', currentUser.roll_no);
     setupRealtime();
+    fetchCallHistory();
+}
+
+async function fetchCallHistory() {
+    try {
+        const { data, error } = await supabaseClient
+            .from('calls')
+            .select('*')
+            .or(`from_roll.eq.${currentUser.roll_no},to_roll.eq.${currentUser.roll_no}`)
+            .order('created_at', { ascending: false })
+            .limit(5);
+
+        if (error) throw error;
+        renderCallHistory(data);
+    } catch (err) {
+        console.error("Error fetching history:", err);
+    }
+}
+
+function renderCallHistory(calls) {
+    const historyList = document.getElementById('call-history-list');
+    if (!historyList) return;
+
+    if (!calls || calls.length === 0) {
+        historyList.innerHTML = `<div class="no-history" style="color: var(--text-ghost); font-size: 0.9rem; font-style: italic;">No recent connections found.</div>`;
+        return;
+    }
+
+    historyList.innerHTML = calls.map(call => {
+        const isOutgoing = call.from_roll === currentUser.roll_no;
+        const otherParty = isOutgoing ? call.to_roll : call.from_roll;
+        const time = new Date(call.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const date = new Date(call.created_at).toLocaleDateString([], { month: 'short', day: 'numeric' });
+
+        let statusClass = `status-${call.status}`;
+        let statusText = call.status;
+
+        if (call.status === 'calling' && !isOutgoing) {
+            statusClass = 'status-missed';
+            statusText = 'missed';
+        }
+
+        return `
+            <div class="history-item">
+                <div class="history-info">
+                    <span class="history-roll">${isOutgoing ? '↗' : '↙'} ${otherParty}</span>
+                    <span class="history-time">${date} • ${time}</span>
+                </div>
+                <div class="history-status ${statusClass}">${statusText}</div>
+            </div>
+        `;
+    }).join('');
 }
 
 async function cleanupOldCalls() {
@@ -151,6 +226,7 @@ async function cleanupOldCalls() {
 }
 
 function setupRealtime() {
+    // 1. Database Changes Listener
     supabaseClient.channel('db-changes').on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'calls', filter: `to_roll=eq.${currentUser.roll_no}` }, payload => {
         const call = payload.new;
         const createdAt = new Date(call.created_at).getTime();
@@ -162,8 +238,47 @@ function setupRealtime() {
         if (activeCallId && call.id === activeCallId) handleCallUpdate(call);
     }).subscribe();
 
+    // 2. WebRTC Signaling Channel
     signalingChannel = supabaseClient.channel(`signaling:${currentUser.roll_no}`);
     signalingChannel.on('broadcast', { event: 'signal' }, payload => handleSignalingMessage(payload.payload)).subscribe();
+
+    // 3. Automatic Online Status with Presence
+    const presenceChannel = supabaseClient.channel('online-users');
+    presenceChannel
+        .on('presence', { event: 'sync' }, () => {
+            const state = presenceChannel.presenceState();
+            const isUserOnline = Object.values(state).flat().some(p => p.roll_no === currentUser.roll_no);
+            updateLocalStatusDisplay(isUserOnline);
+        })
+        .on('presence', { event: 'join' }, ({ key, newPresences }) => {
+            if (newPresences.some(p => p.roll_no === currentUser.roll_no)) {
+                supabaseClient.from('users').update({ online: true }).eq('roll_no', currentUser.roll_no);
+            }
+        })
+        .on('presence', { event: 'leave' }, ({ key, leftPresences }) => {
+            if (leftPresences.some(p => p.roll_no === currentUser.roll_no)) {
+                supabaseClient.from('users').update({ online: false }).eq('roll_no', currentUser.roll_no);
+            }
+        })
+        .subscribe(async (status) => {
+            if (status === 'SUBSCRIBED') {
+                await presenceChannel.track({ roll_no: currentUser.roll_no, name: currentUser.name });
+            }
+        });
+}
+
+function updateLocalStatusDisplay(isOnline) {
+    const indicator = document.getElementById('online-indicator');
+    const statusText = document.getElementById('current-status-text');
+    if (!indicator || !statusText) return;
+
+    if (isOnline) {
+        indicator.classList.remove('offline');
+        statusText.innerText = "ONLINE";
+    } else {
+        indicator.classList.add('offline');
+        statusText.innerText = "OFFLINE";
+    }
 }
 
 // --- WebRTC Logic ---
@@ -218,12 +333,14 @@ async function initiateCall() {
         activeCallId = call.id;
 
         showActiveCallUI(targetUser.name);
+        playDialTone();
         await createPeerConnection(targetRoll);
         const offer = await peerConnection.createOffer();
         await peerConnection.setLocalDescription(offer);
         sendSignalingMessage({ type: 'offer', offer: offer, to: targetRoll });
     } catch (err) {
         showToast(err.message);
+        stopTones();
     }
 }
 
@@ -235,9 +352,11 @@ async function showIncomingCall(call) {
     const modal = document.getElementById('incoming-call-modal');
     modal.style.display = 'flex';
     setTimeout(() => modal.classList.add('active'), 10);
+    playRingtone();
 }
 
 async function acceptCall() {
+    stopTones();
     await supabaseClient.from('calls').update({ status: 'accepted' }).eq('id', activeCallId);
     showToast("Connection established");
     const modal = document.getElementById('incoming-call-modal');
@@ -252,12 +371,14 @@ async function acceptCall() {
 }
 
 async function rejectCall() {
+    stopTones();
     await supabaseClient.from('calls').update({ status: 'rejected' }).eq('id', activeCallId);
     showToast("Call declined");
     resetCallUI();
 }
 
 async function endCall() {
+    stopTones();
     await supabaseClient.from('calls').update({ status: 'ended' }).eq('id', activeCallId);
     showToast("Connection terminated");
     resetCallUI();
@@ -265,6 +386,7 @@ async function endCall() {
 
 function handleCallUpdate(call) {
     if (call.status === 'accepted') {
+        stopTones();
         showToast("Call Accepted");
         const other = call.from_roll === currentUser.roll_no ? call.to_roll : call.from_roll;
         const name = currentUser.roll_no === call.from_roll ? "Member" : "Partner";
@@ -279,28 +401,52 @@ function showActiveCallUI(name) {
     document.getElementById('initial-ui').classList.add('hidden');
     document.getElementById('active-call-ui').classList.remove('hidden');
     document.getElementById('active-user-text').innerText = name;
+    // Keep timer hidden until call is accepted
+    document.getElementById('call-timer-container').classList.add('hidden');
 }
 
 function resetCallUI() {
+    stopTones();
     if (peerConnection) { peerConnection.close(); peerConnection = null; }
     if (localStream) { localStream.getTracks().forEach(t => t.stop()); localStream = null; }
     document.getElementById('initial-ui').classList.remove('hidden');
     document.getElementById('active-call-ui').classList.add('hidden');
+    document.getElementById('call-timer-container').classList.add('hidden');
     const modal = document.getElementById('incoming-call-modal');
     modal.classList.remove('active');
     setTimeout(() => modal.style.display = 'none', 500);
     activeCallId = null;
     clearInterval(callTimerInterval);
     document.getElementById('call-timer').innerText = '00:00';
+    fetchCallHistory();
 }
 
 function startTimer() {
+    document.getElementById('call-timer-container').classList.remove('hidden');
     let s = 0;
     clearInterval(callTimerInterval);
     callTimerInterval = setInterval(() => {
         s++;
         document.getElementById('call-timer').innerText = `${Math.floor(s / 60).toString().padStart(2, '0')}:${(s % 60).toString().padStart(2, '0')}`;
     }, 1000);
+}
+
+// --- Audio Tones ---
+function playDialTone() {
+    const dial = document.getElementById('dialtone-audio');
+    if (dial) dial.play().catch(e => console.log("Audio play blocked", e));
+}
+
+function playRingtone() {
+    const ring = document.getElementById('ringtone-audio');
+    if (ring) ring.play().catch(e => console.log("Audio play blocked", e));
+}
+
+function stopTones() {
+    const dial = document.getElementById('dialtone-audio');
+    const ring = document.getElementById('ringtone-audio');
+    if (dial) { dial.pause(); dial.currentTime = 0; }
+    if (ring) { ring.pause(); ring.currentTime = 0; }
 }
 
 async function logout() {

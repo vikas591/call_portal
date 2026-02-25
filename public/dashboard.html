@@ -7,15 +7,17 @@
     <title>Dashboard | RollConnect</title>
     <link rel="stylesheet" href="style.css">
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="https://cdn.jsdelivr.net/particles.js/2.0.0/particles.min.js"></script>
 </head>
 
 <body>
+    <div id="particles-js"></div>
     <header class="navbar">
         <div class="nav-brand">RollConnect</div>
         <div class="nav-user">
             <div class="user-tag">
-                <div class="status-dot"></div>
-                ONLINE | <span id="my-roll">...</span>
+                <div class="status-dot" id="online-indicator"></div>
+                <span id="current-status-text">ONLINE</span> | <span id="my-roll">...</span>
             </div>
             <button id="logout-btn" class="btn btn-secondary"
                 style="width: auto; padding: 0.5rem 1.25rem; font-size: 0.8rem;">LOGOUT</button>
@@ -45,6 +47,21 @@
                         Initiate Call
                     </button>
                 </div>
+
+                <!-- Call History Section -->
+                <div class="history-wrapper"
+                    style="margin-top: 3rem; border-top: 1px solid var(--glass-border); padding-top: 2rem;">
+                    <h3
+                        style="font-size: 1.1rem; font-weight: 700; margin-bottom: 1.5rem; text-align: left; color: var(--accent-cyan); letter-spacing: 1px; text-transform: uppercase;">
+                        Recent Connections
+                    </h3>
+                    <div id="call-history-list" class="history-list">
+                        <!-- History items will be injected here -->
+                        <div class="no-history"
+                            style="color: var(--text-ghost); font-size: 0.9rem; font-style: italic;">No recent
+                            connections found.</div>
+                    </div>
+                </div>
             </div>
 
             <!-- Active Call UI -->
@@ -57,7 +74,9 @@
                 <div id="active-user-text" style="font-size: 2.5rem; font-weight: 800; color: var(--accent-cyan);">
                     Member</div>
 
-                <div class="call-timer" id="call-timer">00:00</div>
+                <div id="call-timer-container" class="hidden">
+                    <div class="call-timer" id="call-timer">00:00</div>
+                </div>
 
                 <button id="end-call-btn" class="btn btn-danger end-call-btn">
                     <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3">
@@ -89,6 +108,8 @@
     </div>
 
     <audio id="remote-audio" autoplay></audio>
+    <audio id="ringtone-audio" loop src="https://assets.mixkit.co/active_storage/sfx/135/135-preview.mp3"></audio>
+    <audio id="dialtone-audio" loop src="https://assets.mixkit.co/active_storage/sfx/134/134-preview.mp3"></audio>
     <div id="toast-container" class="toast-container"></div>
 
     <script src="app.js"></script>

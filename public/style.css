@@ -26,13 +26,22 @@
 }
 
 body {
-    background: var(--bg-gradient);
-    background-attachment: fixed;
+    background: transparent;
     color: var(--text-white);
     min-height: 100vh;
     display: flex;
     flex-direction: column;
     overflow-x: hidden;
+}
+
+#particles-js {
+    position: fixed;
+    width: 100%;
+    height: 100%;
+    background: var(--bg-gradient);
+    z-index: -1;
+    top: 0;
+    left: 0;
 }
 
 /* 3D Floating Animations */
@@ -427,6 +436,83 @@ input:focus {
 /* Utilities */
 .hidden {
     display: none !important;
+}
+
+.status-dot.offline {
+    background: #64748b;
+    box-shadow: 0 0 10px #64748b;
+    animation: none;
+}
+
+.history-list {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.history-item {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--glass-border);
+    padding: 1rem 1.5rem;
+    border-radius: 1.25rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    transition: all 0.3s ease;
+}
+
+.history-item:hover {
+    background: rgba(255, 255, 255, 0.06);
+    transform: translateX(5px);
+}
+
+.history-info {
+    text-align: left;
+}
+
+.history-roll {
+    font-weight: 700;
+    font-size: 1rem;
+    display: block;
+    margin-bottom: 0.2rem;
+}
+
+.history-time {
+    font-size: 0.8rem;
+    color: var(--text-ghost);
+}
+
+.history-status {
+    padding: 0.4rem 0.8rem;
+    border-radius: 2rem;
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.status-accepted {
+    background: rgba(34, 197, 94, 0.1);
+    color: #4ade80;
+    border: 1px solid rgba(34, 197, 94, 0.2);
+}
+
+.status-rejected {
+    background: rgba(239, 68, 68, 0.1);
+    color: #f87171;
+    border: 1px solid rgba(239, 68, 68, 0.2);
+}
+
+.status-ended {
+    background: rgba(148, 163, 184, 0.1);
+    color: #cbd5e1;
+    border: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.status-missed {
+    background: rgba(245, 158, 11, 0.1);
+    color: #fbbf24;
+    border: 1px solid rgba(245, 158, 11, 0.2);
 }
 
 @media (max-width: 600px) {
