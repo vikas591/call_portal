@@ -45,12 +45,88 @@ function initParticles() {
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
     initParticles();
+    console.log("RollConnect v1.0.2 Initialized");
+
+    // Check for secure context (HTTPS/localhost)
+    if (!window.isSecureContext) {
+        showToast("⚠️ Browser security may block your microphone. Use HTTPS for best results.", 10000);
+    }
+
     if (document.getElementById('login-form')) {
         initAuthFlow();
     } else if (document.getElementById('welcome-name')) {
         initDashboard();
+        restoreCallState();
     }
 });
+
+// --- Audio Unlocking ---
+let audioUnlocked = false;
+function unlockAudio() {
+    if (audioUnlocked) return;
+    const elements = ['remote-audio', 'ringtone-audio', 'dialtone-audio'];
+    elements.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) {
+            el.play().then(() => {
+                el.pause();
+                el.currentTime = 0;
+            }).catch(e => console.log(`Failed to unlock ${id}:`, e));
+        }
+    });
+    audioUnlocked = true;
+    console.log("Audio elements unlocked via user interaction.");
+}
+
+document.body.addEventListener('click', unlockAudio, { once: true });
+document.body.addEventListener('touchstart', unlockAudio, { once: true });
+
+// --- Call State Persistence ---
+function saveCallState(targetRoll, targetName) {
+    if (!activeCallId) return;
+    const state = {
+        activeCallId,
+        targetRoll,
+        targetName,
+        startTime: new Date().getTime()
+    };
+    localStorage.setItem('active_call_state', JSON.stringify(state));
+}
+
+function clearCallState() {
+    localStorage.removeItem('active_call_state');
+}
+
+async function restoreCallState() {
+    const saved = localStorage.getItem('active_call_state');
+    if (!saved) return;
+
+    try {
+        const state = JSON.parse(saved);
+        const { data: call, error } = await supabaseClient.from('calls').select('*').eq('id', state.activeCallId).single();
+
+        if (error || !['accepted', 'calling'].includes(call.status)) {
+            clearCallState();
+            return;
+        }
+
+        activeCallId = state.activeCallId;
+        showActiveCallUI(state.targetName);
+
+        if (call.status === 'accepted') {
+            await createPeerConnection(state.targetRoll);
+            startTimer();
+
+            // On refresh, audio is often blocked until user interaction
+            if (!audioUnlocked) {
+                showToast("🔊 Tap anywhere to resume audio", 6000);
+            }
+        }
+    } catch (err) {
+        console.error("Failed to restore call:", err);
+        clearCallState();
+    }
+}
 
 // --- UI Helpers ---
 function showToast(message, duration = 3000) {
@@ -165,6 +241,15 @@ async function initDashboard() {
     document.getElementById('accept-btn').onclick = acceptCall;
     document.getElementById('reject-btn').onclick = rejectCall;
 
+    document.getElementById('mute-btn').onclick = toggleMute;
+    document.getElementById('speaker-btn').onclick = toggleSpeaker;
+
+    // Pre-warm the Mic to avoid delay during actual calls
+    navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
+        localStream = stream;
+        console.log("Mic pre-warmed and ready.");
+    }).catch(e => console.log("Mic pre-warm skipped/blocked", e));
+
     await cleanupOldCalls();
     setupRealtime();
     fetchCallHistory();
@@ -209,16 +294,32 @@ function renderCallHistory(calls) {
             statusText = 'missed';
         }
 
+        if (call.status === 'accepted') {
+            statusText = 'spoken';
+        }
+
         return `
             <div class="history-item">
                 <div class="history-info">
                     <span class="history-roll">${isOutgoing ? '↗' : '↙'} ${otherParty}</span>
                     <span class="history-time">${date} • ${time}</span>
                 </div>
-                <div class="history-status ${statusClass}">${statusText}</div>
+                <div class="history-actions">
+                    <div class="history-status ${statusClass}">${statusText}</div>
+                    <button class="btn-history-call" onclick="callFromHistory('${otherParty}')" title="Call Back">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+                            <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path>
+                        </svg>
+                    </button>
+                </div>
             </div>
         `;
     }).join('');
+}
+
+async function callFromHistory(rollNo) {
+    document.getElementById('target_roll').value = rollNo;
+    await initiateCall();
 }
 
 async function cleanupOldCalls() {
@@ -285,15 +386,66 @@ function updateLocalStatusDisplay(isOnline) {
 async function createPeerConnection(target) {
     if (peerConnection) return;
     peerConnection = new RTCPeerConnection(rtcConfig);
+
+    // Warm up the audio element for mobile browser autoplay policies
+    const remoteAudio = document.getElementById('remote-audio');
+    remoteAudio.play().then(() => {
+        remoteAudio.pause();
+        remoteAudio.currentTime = 0;
+    }).catch(e => console.log("Audio warm-up blocked", e));
+
     try {
-        if (!localStream) localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        if (!localStream) {
+            localStream = await navigator.mediaDevices.getUserMedia({
+                audio: {
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    autoGainControl: true,
+                    sampleRate: 48000
+                }
+            });
+        }
         localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
     } catch (e) {
         showToast("Mic access denied.");
     }
-    peerConnection.ontrack = (event) => document.getElementById('remote-audio').srcObject = event.streams[0];
+
+    peerConnection.ontrack = (event) => {
+        console.log("Remote track received:", event.track.kind);
+        const remoteAudio = document.getElementById('remote-audio');
+        if (event.streams && event.streams[0]) {
+            remoteAudio.srcObject = event.streams[0];
+            remoteAudio.play().catch(e => {
+                console.error("Audio playback failed:", e);
+                showToast("Tap screen to enable audio");
+                // Allow user to manually start audio if blocked
+                document.body.addEventListener('click', () => {
+                    remoteAudio.play();
+                }, { once: true });
+            });
+        }
+    };
+
     peerConnection.onicecandidate = (event) => {
-        if (event.candidate) sendSignalingMessage({ type: 'candidate', candidate: event.candidate, to: target });
+        if (event.candidate) {
+            console.log("ICE Candidate generated:", event.candidate.candidate.substring(0, 50) + "...");
+            sendSignalingMessage({ type: 'candidate', candidate: event.candidate, to: target });
+        }
+    };
+
+    peerConnection.oniceconnectionstatechange = () => {
+        console.log("ICE Connection State:", peerConnection.iceConnectionState);
+        if (peerConnection.iceConnectionState === 'failed') {
+            showToast("Connection failed. Check your network.");
+        }
+    };
+
+    peerConnection.onsignalingstatechange = () => {
+        console.log("Signaling State:", peerConnection.signalingState);
+    };
+
+    peerConnection.onconnectionstatechange = () => {
+        console.log("Total Connection State:", peerConnection.connectionState);
     };
 }
 
@@ -323,30 +475,46 @@ async function initiateCall() {
     const targetRoll = document.getElementById('target_roll').value.trim().toUpperCase();
     if (!targetRoll || targetRoll === currentUser.roll_no) return;
 
+    // 1. Instant UI Response
+    showActiveCallUI(targetRoll);
+    playDialTone();
+
     try {
         const { data: targetUser } = await supabaseClient.from('users').select('*').eq('roll_no', targetRoll).maybeSingle();
         if (!targetUser) throw new Error('User not found');
         if (!targetUser.online) throw new Error('User is currently offline');
 
+        // Update name in UI once found
+        document.getElementById('active-user-text').innerText = targetUser.name;
+
         showToast("Initiating secure connection...");
         const { data: call } = await supabaseClient.from('calls').insert([{ from_roll: currentUser.roll_no, to_roll: targetRoll, status: 'calling' }]).select().single();
         activeCallId = call.id;
 
-        showActiveCallUI(targetUser.name);
-        playDialTone();
+        saveCallState(targetRoll, targetUser.name);
         await createPeerConnection(targetRoll);
         const offer = await peerConnection.createOffer();
         await peerConnection.setLocalDescription(offer);
         sendSignalingMessage({ type: 'offer', offer: offer, to: targetRoll });
     } catch (err) {
         showToast(err.message);
-        stopTones();
+        resetCallUI();
     }
 }
 
 async function showIncomingCall(call) {
+    if (activeCallId) return; // Guard against multiple calls or redundant events
     activeCallId = call.id;
+
     const { data: caller } = await supabaseClient.from('users').select('name').eq('roll_no', call.from_roll).maybeSingle();
+
+    // Safety check in case call was ended/rejected while fetching caller info
+    const { data: currentCall } = await supabaseClient.from('calls').select('status').eq('id', activeCallId).single();
+    if (currentCall?.status !== 'calling') {
+        activeCallId = null;
+        return;
+    }
+
     document.getElementById('caller-roll-text').innerText = call.from_roll;
     document.getElementById('modal-avatar').innerText = (caller?.name || 'U')[0];
     const modal = document.getElementById('incoming-call-modal');
@@ -357,17 +525,29 @@ async function showIncomingCall(call) {
 
 async function acceptCall() {
     stopTones();
-    await supabaseClient.from('calls').update({ status: 'accepted' }).eq('id', activeCallId);
-    showToast("Connection established");
     const modal = document.getElementById('incoming-call-modal');
     modal.classList.remove('active');
     setTimeout(() => modal.style.display = 'none', 500);
 
-    const { data: call } = await supabaseClient.from('calls').select('*').eq('id', activeCallId).single();
-    const other = call.from_roll === currentUser.roll_no ? call.to_roll : call.from_roll;
-    const { data: user } = await supabaseClient.from('users').select('name').eq('roll_no', other).maybeSingle();
-    showActiveCallUI(user?.name || other);
+    // Instant UI Transition
+    const callerRoll = document.getElementById('caller-roll-text').innerText;
+    showActiveCallUI(callerRoll);
     startTimer();
+
+    try {
+        await supabaseClient.from('calls').update({ status: 'accepted' }).eq('id', activeCallId);
+        showToast("Connection established");
+
+        const { data: call } = await supabaseClient.from('calls').select('*').eq('id', activeCallId).single();
+        const other = call.from_roll === currentUser.roll_no ? call.to_roll : call.from_roll;
+        const { data: user } = await supabaseClient.from('users').select('name').eq('roll_no', other).maybeSingle();
+
+        if (user) document.getElementById('active-user-text').innerText = user.name;
+        saveCallState(other, user?.name || other);
+    } catch (err) {
+        console.error("Accept call error:", err);
+        resetCallUI();
+    }
 }
 
 async function rejectCall() {
@@ -386,12 +566,13 @@ async function endCall() {
 
 function handleCallUpdate(call) {
     if (call.status === 'accepted') {
-        stopTones();
+        stopTones(); // Force stop ringing/dialing on both ends
         showToast("Call Accepted");
         const other = call.from_roll === currentUser.roll_no ? call.to_roll : call.from_roll;
         const name = currentUser.roll_no === call.from_roll ? "Member" : "Partner";
         startTimer();
     } else if (['rejected', 'ended'].includes(call.status)) {
+        stopTones();
         showToast(`Call ${call.status}`);
         resetCallUI();
     }
@@ -407,6 +588,7 @@ function showActiveCallUI(name) {
 
 function resetCallUI() {
     stopTones();
+    clearCallState(); // Clear persistence state
     if (peerConnection) { peerConnection.close(); peerConnection = null; }
     if (localStream) { localStream.getTracks().forEach(t => t.stop()); localStream = null; }
     document.getElementById('initial-ui').classList.remove('hidden');
@@ -419,6 +601,38 @@ function resetCallUI() {
     clearInterval(callTimerInterval);
     document.getElementById('call-timer').innerText = '00:00';
     fetchCallHistory();
+
+    // Reset control button states
+    document.getElementById('mute-btn').classList.remove('active');
+    document.getElementById('speaker-btn').classList.remove('active');
+}
+
+function toggleMute() {
+    if (!localStream) return;
+    const audioTrack = localStream.getAudioTracks()[0];
+    if (audioTrack) {
+        audioTrack.enabled = !audioTrack.enabled;
+        const btn = document.getElementById('mute-btn');
+        btn.classList.toggle('active', !audioTrack.enabled);
+        showToast(audioTrack.enabled ? "Microphone Unmuted" : "Microphone Muted");
+    }
+}
+
+function toggleSpeaker() {
+    const remoteAudio = document.getElementById('remote-audio');
+    const btn = document.getElementById('speaker-btn');
+
+    // Simple toggle simulation: Increase volume or toggle class for UI feedback
+    // Real setSinkId often requires HTTPS and modern Chrome
+    if (remoteAudio.volume < 1.0) {
+        remoteAudio.volume = 1.0;
+        btn.classList.add('active');
+        showToast("Speaker Mode: ON");
+    } else {
+        remoteAudio.volume = 0.5;
+        btn.classList.remove('active');
+        showToast("Speaker Mode: OFF (Normal)");
+    }
 }
 
 function startTimer() {

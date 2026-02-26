@@ -76,13 +76,16 @@
 
                 <div id="call-timer-container" class="hidden">
                     <div class="call-timer" id="call-timer">00:00</div>
+                    <div class="call-controls">
+                        <button id="mute-btn" class="btn-control" title="Mute/Unmute">
+                            <span class="icon">🎤</span>
+                        </button>
+                        <button id="speaker-btn" class="btn-control" title="Speaker toggle">
+                            <span class="icon">📢</span>
+                        </button>
+                        <button id="end-call-btn" class="btn btn-danger">END CALL</button>
+                    </div>
                 </div>
-
-                <button id="end-call-btn" class="btn btn-danger end-call-btn">
-                    <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3">
-                        <path d="M18 6L6 18M6 6l12 12" />
-                    </svg>
-                </button>
             </div>
         </div>
     </main>
@@ -107,12 +110,13 @@
         </div>
     </div>
 
-    <audio id="remote-audio" autoplay></audio>
-    <audio id="ringtone-audio" loop src="https://assets.mixkit.co/active_storage/sfx/135/135-preview.mp3"></audio>
-    <audio id="dialtone-audio" loop src="https://assets.mixkit.co/active_storage/sfx/134/134-preview.mp3"></audio>
+    <audio id="remote-audio" autoplay playsinline></audio>
+    <audio id="ringtone-audio" loop playsinline
+        src="https://assets.mixkit.co/active_storage/sfx/135/135-preview.mp3"></audio>
+    <audio id="dialtone-audio" loop playsinline src="https://www.soundjay.com/phone/phone-calling-1.mp3"></audio>
     <div id="toast-container" class="toast-container"></div>
 
-    <script src="app.js"></script>
+    <script src="app.js?v=1.0.1"></script>
 </body>
 
 </html>
